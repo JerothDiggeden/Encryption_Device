@@ -2,6 +2,12 @@
 #include <Arduino.h>
 #include <SHA256.h> // Include the SHA256 library
 
+// Function prototypes
+uint32_t generatePrime();
+bool isProbablePrime(uint32_t n, int k = 5); // Default value for k
+uint32_t modInverse(uint32_t a, uint32_t m);
+uint32_t modExp(uint32_t base, uint32_t exp, uint32_t mod);
+
 // Constants
 const uint8_t deviceAddr = 0x50; // I2C address of the SRAM
 const uint8_t button1Pin = 2;     // Pin for the first button (start sampling)
@@ -14,7 +20,7 @@ uint8_t micValues[numSamples];     // Store mic values
 // RSA Variables
 uint32_t p, q, n, phi, e = 65537, d; // RSA components
 unsigned long lastWriteTime = 0; // Last write time for mic data
-const unsigned long writeInterval = 6; // Interval in microseconds (150 samples per second)
+const unsigned long writeInterval = 150; // Interval in microseconds
 
 void setup() {
     Serial.begin(9600);
@@ -92,7 +98,7 @@ void generateKeys() {
         micValues[i] = readByteFromSRAM(deviceAddr, addr); // Read back the value from RAM
     }
 
-    // Generate new prime numbers for RSA
+    // Generate new prime numbers for RSA using microphone data
     p = generatePrime();
     q = generatePrime();
     n = p * q; // n = p * q
@@ -109,8 +115,64 @@ void generateKeys() {
 }
 
 uint32_t generatePrime() {
-    // Simple function to generate a random prime number
-    return random(50, 100); // Random number for demonstration, should be a prime
+    uint32_t seed = 0;
+    for (int i = 0; i < numSamples; i++) {
+        seed ^= micValues[i]; // Combine mic values into a seed
+    }
+    
+    randomSeed(seed); // Seed the random number generator
+    uint64_t num;
+
+    // Adjust range for 16-bit primes
+    do {
+        num = random((1ULL << 31), (1ULL << 32) - 32); // Correct range for 16-bit
+    } while (!isProbablePrime(num, 3)); // Ensure it’s prime with reduced k
+    return num;
+}
+
+
+bool isProbablePrime(uint32_t n, int k) { // No default value here
+    if (n <= 1) return false;
+    if (n <= 3) return true;
+    
+    if (n % 2 == 0) return false;
+
+    uint32_t d = n - 1;
+    int r = 0;
+    while (d % 2 == 0) {
+        d /= 2;
+        r++;
+    }
+
+    for (int i = 0; i < k; i++) {
+        uint32_t a = 2 + random(0, n - 4);
+        uint32_t x = modExp(a, d, n);
+        if (x == 1 || x == n - 1) continue;
+
+        bool composite = true;
+        for (int j = 0; j < r - 1; j++) {
+            x = modExp(x, 2, n);
+            if (x == n - 1) {
+                composite = false;
+                break;
+            }
+        }
+        if (composite) return false;
+    }
+    return true;
+}
+
+uint32_t modExp(uint32_t base, uint32_t exp, uint32_t mod) {
+    uint32_t result = 1;
+    base = base % mod;
+    while (exp > 0) {
+        if (exp % 2 == 1) {
+            result = (result * base) % mod;
+        }
+        exp = exp >> 1;
+        base = (base * base) % mod;
+    }
+    return result;
 }
 
 uint32_t modInverse(uint32_t a, uint32_t m) {
@@ -142,11 +204,7 @@ bool writeByteToSRAM(uint8_t deviceAddr, uint16_t memAddr, uint8_t data) {
     Wire.write(memAddr & 0xFF);
     Wire.write(data); // Write the data byte
 
-    // Check for errors in transmission
-    if (Wire.endTransmission() != 0) {
-        return false; // Indicate a write error
-    }
-    return true; // Write successful
+    return Wire.endTransmission() == 0; // Return true if successful
 }
 
 uint8_t readByteFromSRAM(uint8_t deviceAddr, uint16_t memAddr) {
@@ -154,7 +212,6 @@ uint8_t readByteFromSRAM(uint8_t deviceAddr, uint16_t memAddr) {
     Wire.write((memAddr >> 8) & 0xFF);
     Wire.write(memAddr & 0xFF);
     
-    // Check for errors in transmission
     if (Wire.endTransmission() != 0) {
         Serial.println("Error reading from SRAM.");
         return 0; // Return 0 on error
