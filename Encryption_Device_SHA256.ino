@@ -125,7 +125,7 @@ uint32_t generatePrime() {
 
     // Adjust range for 16-bit primes
     do {
-        num = random((1ULL << 31), (1ULL << 32) - 32); // Correct range for 16-bit
+        num = random((1ULL << 15), (1ULL << 16) - 16); // Correct range for 16-bit
     } while (!isProbablePrime(num, 3)); // Ensure it’s prime with reduced k
     return num;
 }
